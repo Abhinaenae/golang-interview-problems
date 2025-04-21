@@ -48,16 +48,31 @@ func Crawl(url string, depth int, fetcher Fetcher) ([]string, error) {
 
 	//Use waitgroup to wait for all goroutines to finish
 	var wg sync.WaitGroup
+
+	// Create a channel to collect results from goroutines in parallel
+	// This is not necessary, but it can be useful if you want to process results as they come in
+	ch := make(chan string)
 	for _, u := range urls {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if res, err := Crawl(u, depth-1, fetcher); err == nil {
-				result = append(result, res...)
+				for _, resVal := range res {
+					ch <- resVal
+				}
 			}
 		}()
 	}
-	// Wait for all goroutines to finish
-	wg.Wait()
+
+	// Process results from the channel while waiting for goroutines to finish
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	for res := range ch {
+		result = append(result, res)
+	}
+
 	return result, nil
 }

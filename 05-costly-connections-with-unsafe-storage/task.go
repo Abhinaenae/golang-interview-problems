@@ -33,36 +33,63 @@ type Saver interface {
 // Responses must be saved using Saver.Save.
 // Be careful: Saver.Save is not safe for concurrent use.
 func SendAndSave(creator ConnectionCreator, saver Saver, requests []string, maxConn int) {
-
-	saveCh := make(chan string, len(requests))
 	var wg sync.WaitGroup
+	wg.Add(maxConn)
+	reqCh := make(chan string, len(requests))
+	saveCh := make(chan string, len(requests))
 
+	//Populate request channel
 	for _, req := range requests {
+		reqCh <- req
+	}
+	close(reqCh)
+
+	//Connection pool to reuse connections
+	connPool := make(chan Connection, maxConn)
+	for range maxConn {
 		conn, err := creator.NewConnection()
 		if err != nil {
 			slog.Error("Failed to create connection", "error", err)
-			continue
+			return
 		}
-		defer conn.Disconnect()
 		conn.Connect()
-
-		wg.Add(1)
-		go func(r string) {
-			defer wg.Done()
-			resp, err := conn.Send(r)
-			if err != nil {
-				slog.Error("Failed to send request", "error", err)
-				return
-			}
-			saveCh <- resp
-		}(req)
+		connPool <- conn
 	}
 
-	wg.Wait()
-	close(saveCh)
+	//Worker pool to process requests
+	for range maxConn {
+		go func() {
+			defer wg.Done()
 
+			for req := range reqCh {
+				conn := <-connPool //Receive connection from pool
+				resp, err := conn.Send(req)
+				if err != nil {
+					slog.Error("Failed to send request", "error", err)
+					connPool <- conn //Send connection back into pool
+					continue
+				}
+				saveCh <- resp
+				connPool <- conn //Send connection back into pool
+			}
+		}()
+	}
+
+	// Wait for all workers to finish
+	go func() {
+		wg.Wait()
+		close(saveCh)
+
+	}()
+
+	// Read from saveCh and process responses
 	for resp := range saveCh {
 		saver.Save(resp)
 	}
 
+	// Close all connections in the pool
+	close(connPool)
+	for conn := range connPool {
+		conn.Disconnect()
+	}
 }

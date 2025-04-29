@@ -2,47 +2,47 @@ package main
 
 import (
 	"errors"
-	"sync"
 )
+
+// For this specific problem, the channel-based implementation is better because
+// The code is more concise and has fewer moving parts
+// Channels are designed specifically for concurrent communication
+// Channel operations are optimized for concurrent access
+// The problem requires only Push and Pop operations, which channels handle well
+// Channel's buffer naturally implements the fixed-size requirement
+// --------------------------------------------------------------
+// The mutex-based implementation would be better if:
+// You needed to iterate over queue contents
+// You needed to peek at elements
+// You needed more complex queue operations
+// You needed to dynamically resize the queue
+// Since none of these are required by the problem specification,
+// the channel-based implementation is the superior choice.
 
 var ErrQueueFull = errors.New("queue is full")
 
 type Queue struct {
-	store []int
-	mu    *sync.Mutex
+	store chan int
 }
 
 func NewQueue(size int) *Queue {
-	return &Queue{
-		store: make([]int, 0, size),
-		mu:    &sync.Mutex{},
-	}
+	return &Queue{store: make(chan int, size)}
 }
 
 func (q *Queue) Push(val int) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if len(q.store) == cap(q.store) {
+	select {
+	case q.store <- val:
+		return nil
+	default:
 		return ErrQueueFull
 	}
-	q.store = append(q.store, val)
-	return nil
 }
 
 func (q *Queue) Pop() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if len(q.store) == 0 {
+	select {
+	case val := <-q.store:
+		return val
+	default:
 		return -1
 	}
-
-	remove := func(slice []int, s int) []int {
-		return append(slice[:s], slice[s+1:]...)
-	}
-
-	pop := q.store[0]
-	q.store = remove(q.store, 0)
-	return pop
 }
